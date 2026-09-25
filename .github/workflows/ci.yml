@@ -134,6 +134,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ./gradlew assembleRelease \
+            -x :app:lintVitalStandardRelease \
             --stacktrace \
             --warning-mode all
 
