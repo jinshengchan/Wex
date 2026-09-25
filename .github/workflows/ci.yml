@@ -68,30 +68,21 @@ jobs:
 
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
-          echo "===== Install Android API 37.0 ====="
           "$SDKMANAGER" \
             "platform-tools" \
             "platforms;android-37.0"
 
-          echo "===== Install NDK 30 ====="
           "$SDKMANAGER" \
             "ndk;30.0.14904198"
 
-          echo "===== Installed Android platforms ====="
+          echo "===== Android platforms ====="
           ls -la "$ANDROID_HOME/platforms"
 
-          echo "===== Installed NDK ====="
+          echo "===== Android NDK ====="
           ls -la "$ANDROID_HOME/ndk"
 
-          if [ ! -d "$ANDROID_HOME/platforms/android-37.0" ]; then
-            echo "::error::Android SDK Platform 37.0 was not installed."
-            exit 1
-          fi
-
-          if [ ! -d "$ANDROID_HOME/ndk/30.0.14904198" ]; then
-            echo "::error::Android NDK 30.0.14904198 was not installed."
-            exit 1
-          fi
+          test -d "$ANDROID_HOME/platforms/android-37.0"
+          test -d "$ANDROID_HOME/ndk/30.0.14904198"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@nightly
@@ -121,14 +112,8 @@ jobs:
           echo "===== Android SDK ====="
           echo "ANDROID_HOME=$ANDROID_HOME"
 
-          echo "===== Android platforms ====="
-          ls -la "$ANDROID_HOME/platforms"
-
-          echo "===== Android NDK ====="
-          ls -la "$ANDROID_HOME/ndk"
-
-          echo "===== Git ====="
-          git --version
+          echo "===== NDK ====="
+          ls -la "$ANDROID_HOME/ndk/30.0.14904198"
 
           echo "===== Submodules ====="
           git submodule status
@@ -136,12 +121,12 @@ jobs:
       - name: Configure native build
         shell: bash
         run: |
-          cargo xtask configure
+          cargo run -p xtask -- configure
 
       - name: Build native libraries
         shell: bash
         run: |
-          cargo xtask build --native-only
+          cargo run -p xtask -- build --native-only
 
       - name: Build Release APK
         shell: bash
@@ -189,7 +174,6 @@ jobs:
               ' sh {} +
           fi
 
-          echo "===== Mapping files ====="
           ls -lh dist/mapping || true
 
       - name: Upload APK
