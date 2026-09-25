@@ -10,7 +10,6 @@ import com.Johnny.wcx.BuildConfig
 import com.Johnny.wcx.constants.PackageNames
 import com.Johnny.wcx.loader.abc.IHookBridge
 import com.Johnny.wcx.loader.entry.common.ModuleLoader
-import com.Johnny.wcx.loader.utils.NativeLoader
 import com.Johnny.wcx.utils.WeLogger
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -62,7 +61,6 @@ object ZygiskEntry {
                 check(nativeInitialize()) {
                     "failed to initialize ART hook runtime and trust ZygiskEntry loader"
                 }
-                NativeLoader.configureZygiskPayload(apkPath, dataDir)
                 val service = ZygiskLoaderService(
                     modulePath = apkPath,
                     versionName = BuildConfig.VERSION_NAME,
