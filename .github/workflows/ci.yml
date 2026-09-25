@@ -29,14 +29,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. 下载源码，并自动拉取 bsh / reflekt 子模块
       - name: Checkout source
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
           submodules: recursive
 
-      # 2. 项目要求 JDK 17
       - name: Set up JDK 17
         uses: actions/setup-java@v6
         with:
@@ -44,11 +42,9 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      # 3. 给 Gradle Wrapper 执行权限
       - name: Grant Gradle permission
         run: chmod +x gradlew
 
-      # 4. 删除只适合本地电脑使用的 Java 路径
       - name: Prepare Gradle for GitHub Actions
         shell: bash
         run: |
@@ -56,11 +52,10 @@ jobs:
             -e '/^org\.gradle\.java\.installations\.paths=/d' \
             gradle.properties
 
-          echo "gradle.properties used by CI:"
+          echo "===== gradle.properties ====="
           cat gradle.properties
 
-      # 5. 安装项目要求的 Android SDK 37 和 NDK
-      - name: Install Android SDK and NDK
+      - name: Prepare Android SDK and NDK
         shell: bash
         run: |
           SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
@@ -73,18 +68,31 @@ jobs:
 
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
+          echo "===== Install Android API 37.0 ====="
           "$SDKMANAGER" \
             "platform-tools" \
-            "platforms;android-37" \
+            "platforms;android-37.0"
+
+          echo "===== Install NDK 30 ====="
+          "$SDKMANAGER" \
             "ndk;30.0.14904198"
 
-          echo "Android SDK:"
-          echo "$ANDROID_HOME"
+          echo "===== Installed Android platforms ====="
+          ls -la "$ANDROID_HOME/platforms"
 
-          echo "Installed NDK:"
+          echo "===== Installed NDK ====="
           ls -la "$ANDROID_HOME/ndk"
 
-      # 6. Rust 环境
+          if [ ! -d "$ANDROID_HOME/platforms/android-37.0" ]; then
+            echo "::error::Android SDK Platform 37.0 was not installed."
+            exit 1
+          fi
+
+          if [ ! -d "$ANDROID_HOME/ndk/30.0.14904198" ]; then
+            echo "::error::Android NDK 30.0.14904198 was not installed."
+            exit 1
+          fi
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@nightly
         with:
@@ -94,14 +102,12 @@ jobs:
             armv7-linux-androideabi,
             i686-linux-android
 
-      # 7. Rust 缓存
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
           workspaces: . -> target
 
-      # 8. 检查环境
       - name: Show build environment
         shell: bash
         run: |
@@ -112,8 +118,14 @@ jobs:
           rustc --version
           cargo --version
 
-          echo "===== Android ====="
+          echo "===== Android SDK ====="
           echo "ANDROID_HOME=$ANDROID_HOME"
+
+          echo "===== Android platforms ====="
+          ls -la "$ANDROID_HOME/platforms"
+
+          echo "===== Android NDK ====="
+          ls -la "$ANDROID_HOME/ndk"
 
           echo "===== Git ====="
           git --version
@@ -121,23 +133,16 @@ jobs:
           echo "===== Submodules ====="
           git submodule status
 
-      # 9. 配置 Rust Android NDK
       - name: Configure native build
         shell: bash
         run: |
           cargo xtask configure
 
-      # 10. 编译 Rust Native
       - name: Build native libraries
         shell: bash
         run: |
           cargo xtask build --native-only
 
-      # 11. 编译 Release APK
-      #
-      # 如果以后设置正式签名 Secrets，
-      # build.gradle.kts 会自动优先使用正式签名。
-      # 没设置时会回退到 debug signing。
       - name: Build Release APK
         shell: bash
         env:
@@ -147,7 +152,6 @@ jobs:
             --stacktrace \
             --warning-mode all
 
-      # 12. 收集 APK
       - name: Collect APK files
         shell: bash
         run: |
@@ -158,7 +162,6 @@ jobs:
             -name '*.apk' \
             -exec cp -v {} dist/apk/ \;
 
-          echo ""
           echo "===== Generated APKs ====="
           ls -lh dist/apk
 
@@ -169,7 +172,6 @@ jobs:
             exit 1
           fi
 
-      # 13. mapping 有就保存，没有也不会失败
       - name: Collect mapping files
         shell: bash
         run: |
@@ -179,13 +181,17 @@ jobs:
             find app/build/outputs/mapping \
               -type f \
               -name 'mapping.txt' \
-              -exec cp -v {} dist/mapping/ \;
+              -exec sh -c '
+                for file do
+                  variant=$(basename "$(dirname "$file")")
+                  cp -v "$file" "dist/mapping/mapping-${variant}.txt"
+                done
+              ' sh {} +
           fi
 
-          echo "Mapping files:"
+          echo "===== Mapping files ====="
           ls -lh dist/mapping || true
 
-      # 14. 上传 APK
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
@@ -194,7 +200,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # 15. 上传混淆 mapping
       - name: Upload mapping
         uses: actions/upload-artifact@v7
         with:
