@@ -5,26 +5,14 @@ on:
     branches:
       - master
       - dev
-    tags:
-      - 'v*'
     paths-ignore:
       - '**/*.md'
       - '**/*.txt'
-      - '.editorconfig'
-      - '.gitignore'
-      - '.idea/**'
       - 'docs/**'
 
   pull_request:
     branches:
       - master
-    paths-ignore:
-      - '**/*.md'
-      - '**/*.txt'
-      - '.editorconfig'
-      - '.gitignore'
-      - '.idea/**'
-      - 'docs/**'
 
   workflow_dispatch:
 
@@ -41,36 +29,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      # 1. 下载源码，并自动拉取 bsh / reflekt 子模块
+      - name: Checkout source
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Calculate version
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VER="${GITHUB_REF_NAME}"
-          else
-            MAX=$(git tag -l "v[0-9]*" \
-              | sed 's/^v//' \
-              | grep -E '^[0-9]+$' \
-              | sort -n \
-              | tail -n1)
-
-            if [ -z "$MAX" ]; then
-              NEXT=226
-            else
-              NEXT=$((MAX + 1))
-            fi
-
-            VER="v${NEXT}"
-          fi
-
-          echo "VER=${VER}" >> "$GITHUB_ENV"
-          echo "Build version: ${VER}"
-
+      # 2. 项目要求 JDK 17
       - name: Set up JDK 17
         uses: actions/setup-java@v6
         with:
@@ -78,25 +44,22 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Grant execute permission
+      # 3. 给 Gradle Wrapper 执行权限
+      - name: Grant Gradle permission
         run: chmod +x gradlew
 
+      # 4. 删除只适合本地电脑使用的 Java 路径
       - name: Prepare Gradle for GitHub Actions
         shell: bash
         run: |
-          # 删除仅适用于本机的代理和 Java 路径。
-          # 这里只修改 GitHub Actions 临时环境，不修改仓库文件。
           sed -i \
-            -e '/^systemProp\.http\.proxyHost=/d' \
-            -e '/^systemProp\.http\.proxyPort=/d' \
-            -e '/^systemProp\.https\.proxyHost=/d' \
-            -e '/^systemProp\.https\.proxyPort=/d' \
             -e '/^org\.gradle\.java\.installations\.paths=/d' \
             gradle.properties
 
-          echo "CI gradle.properties:"
+          echo "gradle.properties used by CI:"
           cat gradle.properties
 
+      # 5. 安装项目要求的 Android SDK 37 和 NDK
       - name: Install Android SDK and NDK
         shell: bash
         run: |
@@ -106,6 +69,8 @@ jobs:
             SDKMANAGER="$(command -v sdkmanager)"
           fi
 
+          echo "sdkmanager: $SDKMANAGER"
+
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
           "$SDKMANAGER" \
@@ -113,9 +78,13 @@ jobs:
             "platforms;android-37" \
             "ndk;30.0.14904198"
 
-          echo "Installed NDK:"
-          ls -la "${ANDROID_HOME}/ndk" || true
+          echo "Android SDK:"
+          echo "$ANDROID_HOME"
 
+          echo "Installed NDK:"
+          ls -la "$ANDROID_HOME/ndk"
+
+      # 6. Rust 环境
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@nightly
         with:
@@ -125,150 +94,61 @@ jobs:
             armv7-linux-androideabi,
             i686-linux-android
 
-      - name: Rust cache
+      # 7. Rust 缓存
+      - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
           workspaces: . -> target
 
-      - name: Cache Gradle
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/configuration-cache
-          key: >-
-            gradle-${{ runner.os }}-${{
-            hashFiles(
-              '**/*.gradle*',
-              '**/gradle-wrapper.properties',
-              '**/gradle.properties'
-            )
-            }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
-
-      - name: Install system dependencies
+      # 8. 检查环境
+      - name: Show build environment
         shell: bash
         run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update -qq
-          sudo apt-get install -y gcc-multilib
+          echo "===== Java ====="
+          java -version
 
-      - name: Build native library
+          echo "===== Rust ====="
+          rustc --version
+          cargo --version
+
+          echo "===== Android ====="
+          echo "ANDROID_HOME=$ANDROID_HOME"
+
+          echo "===== Git ====="
+          git --version
+
+          echo "===== Submodules ====="
+          git submodule status
+
+      # 9. 配置 Rust Android NDK
+      - name: Configure native build
         shell: bash
         run: |
           cargo xtask configure
+
+      # 10. 编译 Rust Native
+      - name: Build native libraries
+        shell: bash
+        run: |
           cargo xtask build --native-only
 
-      - name: Prepare keystore
-        if: github.event_name != 'pull_request'
-        shell: bash
-        run: |
-          KS_FILE="$RUNNER_TEMP/wekit-keystore.jks"
-          CRED_FILE="$RUNNER_TEMP/keystore-creds.env"
-
-          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
-            echo "::group::Decode project keystore"
-
-            echo "${{ secrets.KEYSTORE_BASE64 }}" \
-              | base64 -d > "$KS_FILE"
-
-            KS_SIZE=$(stat -c%s "$KS_FILE" 2>/dev/null || echo 0)
-
-            if [ "$KS_SIZE" -lt 100 ]; then
-              echo "::error::Decoded keystore is too small"
-              exit 1
-            fi
-
-            KS_LOADED=false
-
-            for STORE_TYPE in PKCS12 JKS; do
-              if keytool -list \
-                -keystore "$KS_FILE" \
-                -storetype "$STORE_TYPE" \
-                -storepass "${{ secrets.STORE_PASSWORD }}" \
-                -alias "${{ secrets.KEY_ALIAS }}" \
-                >/dev/null 2>&1; then
-
-                KS_LOADED=true
-                break
-              fi
-            done
-
-            if [ "$KS_LOADED" = true ]; then
-              echo "KS_PASS=${{ secrets.STORE_PASSWORD }}" \
-                > "$CRED_FILE"
-
-              echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" \
-                >> "$CRED_FILE"
-
-              echo "KEY_PASS=${{ secrets.KEY_PASSWORD }}" \
-                >> "$CRED_FILE"
-
-              echo "Using project keystore."
-              echo "::endgroup::"
-              exit 0
-            fi
-
-            echo "::warning::Project keystore failed."
-            echo "::warning::Using temporary CI keystore."
-            echo "::endgroup::"
-          fi
-
-          echo "::group::Generate temporary keystore"
-
-          KS_PASS="wcx-store-pass"
-          KEY_ALIAS="wcx"
-          KEY_PASS="wcx-store-pass"
-
-          rm -f "$KS_FILE"
-
-          keytool -genkeypair -v \
-            -keystore "$KS_FILE" \
-            -storetype PKCS12 \
-            -alias "$KEY_ALIAS" \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass "$KS_PASS" \
-            -keypass "$KEY_PASS" \
-            -dname "CN=WCX CI, OU=CI, O=WCX, L=CI, S=CI, C=CN"
-
-          echo "KS_PASS=$KS_PASS" > "$CRED_FILE"
-          echo "KEY_ALIAS=$KEY_ALIAS" >> "$CRED_FILE"
-          echo "KEY_PASS=$KEY_PASS" >> "$CRED_FILE"
-
-          echo "::endgroup::"
-
+      # 11. 编译 Release APK
+      #
+      # 如果以后设置正式签名 Secrets，
+      # build.gradle.kts 会自动优先使用正式签名。
+      # 没设置时会回退到 debug signing。
       - name: Build Release APK
-        if: github.event_name != 'pull_request'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WEKIT_KEYSTORE_FILE: >-
-            ${{ runner.temp }}/wekit-keystore.jks
-        run: |
-          source "$RUNNER_TEMP/keystore-creds.env"
-
-          export WEKIT_KEYSTORE_PASSWORD="$KS_PASS"
-          export WEKIT_KEY_ALIAS="$KEY_ALIAS"
-          export WEKIT_KEY_PASSWORD="$KEY_PASS"
-
-          ./gradlew assembleRelease \
-            --warning-mode all \
-            --stacktrace
-
-      - name: Build Pull Request APK
-        if: github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ./gradlew assembleRelease \
-            --warning-mode all \
-            --stacktrace
+            --stacktrace \
+            --warning-mode all
 
-      - name: Collect APKs
+      # 12. 收集 APK
+      - name: Collect APK files
         shell: bash
         run: |
           mkdir -p dist/apk
@@ -278,226 +158,47 @@ jobs:
             -name '*.apk' \
             -exec cp -v {} dist/apk/ \;
 
-          echo "Collected APKs:"
+          echo ""
+          echo "===== Generated APKs ====="
           ls -lh dist/apk
 
-      - name: Collect mappings
-        if: always()
+          APK_COUNT=$(find dist/apk -type f -name '*.apk' | wc -l)
+
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "::error::No APK was generated."
+            exit 1
+          fi
+
+      # 13. mapping 有就保存，没有也不会失败
+      - name: Collect mapping files
         shell: bash
         run: |
           mkdir -p dist/mapping
 
-          find app/build/outputs/mapping \
-            -type f \
-            -name 'mapping.txt' \
-            -print0 2>/dev/null |
-          while IFS= read -r -d '' file; do
-            variant=$(basename "$(dirname "$file")")
+          if [ -d app/build/outputs/mapping ]; then
+            find app/build/outputs/mapping \
+              -type f \
+              -name 'mapping.txt' \
+              -exec cp -v {} dist/mapping/ \;
+          fi
 
-            cp -v "$file" \
-              "dist/mapping/mapping-${variant}.txt"
-          done
-
+          echo "Mapping files:"
           ls -lh dist/mapping || true
 
+      # 14. 上传 APK
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: wcx-apk-${{ env.VER }}
+          name: Wex-v247-build-${{ github.run_number }}
           path: dist/apk/*.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload obfuscation mapping
-        if: always()
+      # 15. 上传混淆 mapping
+      - name: Upload mapping
         uses: actions/upload-artifact@v7
         with:
-          name: wcx-mapping-${{ env.VER }}
+          name: Wex-mapping-build-${{ github.run_number }}
           path: dist/mapping/*.txt
           if-no-files-found: ignore
           retention-days: 30
-
-
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-
-    if: ${{ success() && github.ref == 'refs/heads/master' }}
-
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          submodules: recursive
-
-      - name: Calculate release version
-        id: version
-        shell: bash
-        run: |
-          GIT_HASH=$(git rev-parse --short HEAD)
-
-          MAX=$(git tag -l "v[0-9]*" \
-            | sed 's/^v//' \
-            | grep -E '^[0-9]+$' \
-            | sort -n \
-            | tail -n1)
-
-          if [ -z "$MAX" ]; then
-            NEXT=226
-          else
-            NEXT=$((MAX + 1))
-          fi
-
-          VERSION_TAG="v${NEXT}"
-
-          echo "tag=${VERSION_TAG}" >> "$GITHUB_OUTPUT"
-          echo "hash=${GIT_HASH}" >> "$GITHUB_OUTPUT"
-          echo "count=${NEXT}" >> "$GITHUB_OUTPUT"
-
-      - name: Download APK
-        uses: actions/download-artifact@v8
-        with:
-          pattern: wcx-apk-*
-          path: artifacts
-          merge-multiple: true
-
-      - name: Generate update.json
-        shell: bash
-        run: |
-          cat > artifacts/update.json <<EOF
-          {
-            "versionCode": ${{ steps.version.outputs.count }},
-            "versionName": "${{ steps.version.outputs.tag }}",
-            "commit": "${{ steps.version.outputs.hash }}"
-          }
-          EOF
-
-          cat artifacts/update.json
-
-      - name: Generate changelog
-        id: changelog
-        shell: bash
-        run: |
-          PREV_TAG=$(
-            git describe \
-              --tags \
-              --abbrev=0 \
-              HEAD~1 \
-              2>/dev/null || true
-          )
-
-          if [ -z "$PREV_TAG" ]; then
-            CHANGELOG="首次发布"
-          else
-            COMMITS=$(
-              git log \
-                "${PREV_TAG}..HEAD" \
-                --pretty=format:"- %s" \
-                || true
-            )
-
-            FEATURES=""
-            FIXES=""
-            REMOVED=""
-            OTHER=""
-
-            while IFS= read -r line; do
-              [ -z "$line" ] && continue
-
-              msg=$(echo "$line" | sed 's/^- //')
-
-              if echo "$msg" \
-                | grep -qiE "^(feat|新增|添加|增加|实现)"; then
-
-                FEATURES="${FEATURES}- ${msg}"$'\n'
-
-              elif echo "$msg" \
-                | grep -qiE "^(fix|修复|bug|解决|修)"; then
-
-                FIXES="${FIXES}- ${msg}"$'\n'
-
-              elif echo "$msg" \
-                | grep -qiE "^(remove|删除|移除|去掉)"; then
-
-                REMOVED="${REMOVED}- ${msg}"$'\n'
-
-              else
-                OTHER="${OTHER}- ${msg}"$'\n'
-              fi
-
-            done <<< "$COMMITS"
-
-            CHANGELOG=""
-
-            if [ -n "$FEATURES" ]; then
-              CHANGELOG="${CHANGELOG}### 🎉 新增功能"$'\n'
-              CHANGELOG="${CHANGELOG}${FEATURES}"$'\n'
-            fi
-
-            if [ -n "$FIXES" ]; then
-              CHANGELOG="${CHANGELOG}### 🐛 修复问题"$'\n'
-              CHANGELOG="${CHANGELOG}${FIXES}"$'\n'
-            fi
-
-            if [ -n "$REMOVED" ]; then
-              CHANGELOG="${CHANGELOG}### 🗑️ 移除功能"$'\n'
-              CHANGELOG="${CHANGELOG}${REMOVED}"$'\n'
-            fi
-
-            if [ -n "$OTHER" ]; then
-              CHANGELOG="${CHANGELOG}### 🔧 其他改进"$'\n'
-              CHANGELOG="${CHANGELOG}${OTHER}"$'\n'
-            fi
-
-            if [ -z "$CHANGELOG" ]; then
-              CHANGELOG="暂无详细更新记录"
-            fi
-          fi
-
-          printf '%s\n' "$CHANGELOG" \
-            > artifacts/CHANGELOG.md
-
-          {
-            echo "changelog<<EOF"
-            printf '%s\n' "$CHANGELOG"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          target_commitish: master
-
-          name: >-
-            WCX ${{ steps.version.outputs.tag }}
-
-          body: |
-            ## WCX ${{ steps.version.outputs.tag }}
-
-            自动构建正式版本
-
-            提交 SHA:
-            `${{ steps.version.outputs.hash }}`
-
-            ${{ steps.changelog.outputs.changelog }}
-
-            ### 📦 下载
-
-            在下方 Assets 下载对应架构 APK。
-
-          files: |
-            artifacts/*.apk
-            artifacts/update.json
-            artifacts/CHANGELOG.md
-
-          prerelease: false
-          make_latest: true
-
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
