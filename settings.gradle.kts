@@ -1,8 +1,13 @@
 pluginManagement {
     repositories {
-        maven { url = uri("file:///root/maven-mirror") }
-                maven("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")
         mavenCentral()
+
+        maven {
+            url = uri("file:///root/maven-mirror")
+        }
+
+        maven("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")
+
         gradlePluginPortal()
     }
 }
@@ -10,9 +15,16 @@ pluginManagement {
 @Suppress("UnstableApiUsage")
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+
     repositories {
-        maven { url = uri("file:///root/maven-mirror") }
-                maven("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")
+        mavenCentral()
+
+        maven {
+            url = uri("file:///root/maven-mirror")
+        }
+
+        maven("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")
+
         maven("https://jitpack.io") {
             content {
                 includeGroup("com.github.Ujhhgtg")
@@ -20,12 +32,12 @@ dependencyResolutionManagement {
                 includeGroup("com.github.topjohnwu.libsu")
             }
         }
+
         maven("https://api.xposed.info/") {
             content {
                 includeGroup("de.robv.android.xposed")
             }
         }
-        mavenCentral()
     }
 
     versionCatalogs {
