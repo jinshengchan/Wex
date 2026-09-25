@@ -157,37 +157,10 @@ jobs:
             exit 1
           fi
 
-      - name: Collect mapping files
-        shell: bash
-        run: |
-          mkdir -p dist/mapping
-
-          if [ -d app/build/outputs/mapping ]; then
-            find app/build/outputs/mapping \
-              -type f \
-              -name 'mapping.txt' \
-              -exec sh -c '
-                for file do
-                  variant=$(basename "$(dirname "$file")")
-                  cp -v "$file" "dist/mapping/mapping-${variant}.txt"
-                done
-              ' sh {} +
-          fi
-
-          ls -lh dist/mapping || true
-
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
           name: Wex-v247-build-${{ github.run_number }}
           path: dist/apk/*.apk
           if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload mapping
-        uses: actions/upload-artifact@v7
-        with:
-          name: Wex-mapping-build-${{ github.run_number }}
-          path: dist/mapping/*.txt
-          if-no-files-found: ignore
           retention-days: 30
