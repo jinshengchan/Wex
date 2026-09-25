@@ -23,7 +23,7 @@ import org.json.JSONObject
 /**
  * 消息发送签名器 (CGI 522)
  */
-object NewSendMsgSigner : IPacketPreprocessor {
+object NewSendMsgPacketPreprocessor : IPacketPreprocessor {
     override fun matchesJson(cgiId: Int) = cgiId == 522
 
     override fun matchesProto(value: Any): Boolean = value is INewSendMsgProto
@@ -79,7 +79,7 @@ object NewSendMsgSigner : IPacketPreprocessor {
 /**
  * AppMsg 签名注入 (CGI 222)
  */
-object AppMsgSigner : IPacketPreprocessor {
+object AppMsgPacketPreprocessor : IPacketPreprocessor {
     override fun matchesJson(cgiId: Int) = cgiId == 222
 
     override fun matchesProto(value: Any): Boolean = value is IAppMsgProto
@@ -142,7 +142,7 @@ object AppMsgSigner : IPacketPreprocessor {
 /**
  * 表情签名器 (CGI 175)
  */
-object EmojiSigner : IPacketPreprocessor {
+object EmojiPacketPreprocessor : IPacketPreprocessor {
     override fun matchesJson(cgiId: Int) = cgiId == 175
 
     override fun matchesProto(value: Any): Boolean = value is ISendEmojiProto
@@ -183,7 +183,7 @@ object EmojiSigner : IPacketPreprocessor {
 /**
  * 拍一拍签名器 (CGI 849)
  */
-class SendPatSigner(private val lazyClass: () -> Class<*>?) : IPacketPreprocessor {
+class SendPatPacketPreprocessor(private val lazyClass: () -> Class<*>?) : IPacketPreprocessor {
     override fun matchesJson(cgiId: Int) = cgiId == 849
 
     override fun matchesProto(value: Any): Boolean = value is ISendPatProto
@@ -230,26 +230,5 @@ class SendPatSigner(private val lazyClass: () -> Class<*>?) : IPacketPreprocesso
             WeLogger.e("SendPatSigner", "实例化原生 NetScene 失败: ${e.message}")
             return PreprocessResult(json = json)
         }
-    }
-}
-
-object WePacketSigner {
-    val signers: List<IPacketPreprocessor> by lazy {
-        listOf(
-            NewSendMsgSigner,
-            EmojiSigner,
-            AppMsgSigner,
-            SendPatSigner { WePacketHelper.classNetScenePat.clazz }
-        )
-    }
-
-    fun <T : Any> preprocess(value: T): T {
-        var current = value
-        for (signer in signers) {
-            if (signer.matchesProto(current)) {
-                current = signer.preprocessProto(current)
-            }
-        }
-        return current
     }
 }
