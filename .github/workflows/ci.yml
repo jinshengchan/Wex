@@ -27,6 +27,8 @@ jobs:
   build:
     name: Build APK
     runs-on: ubuntu-latest
+    outputs:
+      version_name: ${{ steps.version.outputs.value }}
 
     steps:
       - name: Checkout source
@@ -34,6 +36,18 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+
+      - name: Read APK version
+        id: version
+        shell: bash
+        run: |
+          VERSION_NAME=$(grep -m1 -E '^[[:space:]]*versionName = "' app/build.gradle.kts | cut -d '"' -f2)
+          if [ -z "$VERSION_NAME" ]; then
+            echo "::error::Could not read app versionName."
+            exit 1
+          fi
+          echo "value=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "APK release version: $VERSION_NAME"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v6
@@ -162,7 +176,37 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: Wex-v247-build-${{ github.run_number }}
+          name: Wex-${{ steps.version.outputs.value }}-build-${{ github.run_number }}
           path: dist/apk/*.apk
           if-no-files-found: error
           retention-days: 30
+  release:
+    name: Publish APK Release
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: Wex-${{ needs.build.outputs.version_name }}-build-${{ github.run_number }}
+          path: release-assets
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.build.outputs.version_name }}-build-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: "WCX ${{ needs.build.outputs.version_name }} Build #${{ github.run_number }}"
+          body: |
+            自动构建 APK。
+            Commit: `${{ github.sha }}`
+          files: release-assets/*.apk
+          fail_on_unmatched_files: true
+          prerelease: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
